@@ -51,6 +51,7 @@ data/processed/*.sqlite
 !data/raw-demo/
 !data/raw-demo/**
 data/raw-demo/**/gemini.md
+data/processed-demo/*.sqlite
 
 # OS / editor files
 .DS_Store
