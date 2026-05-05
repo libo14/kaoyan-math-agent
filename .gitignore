@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+*.local
+
+# Runtime caches and browser automation profiles
+.chatgpt-chrome-profile/
+__pycache__/
+*.py[cod]
+playwright-report/
+test-results/
+.cache/
+
+# User-owned or copyrighted exam data
+data/raw/
+data/imports/
+data/processed/
+data/chatgpt_outputs/
+
+# Keep the tiny synthetic/demo dataset for open-source demos
+!data/processed-demo/
+!data/processed-demo/**
+!data/raw-demo/
+!data/raw-demo/**
+data/raw-demo/**/gemini.md
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Build outputs
+dist/
+out/
+release/

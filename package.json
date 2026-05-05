@@ -1,0 +1,30 @@
+{
+  "name": "math-tutor-agent-desktop",
+  "version": "0.1.0",
+  "description": "Windows desktop MVP for guided postgraduate math problem solving with user-provided LLM APIs.",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "web": "node src/server.js",
+    "self-check": "node scripts/self_check.js",
+    "chatgpt:batch": "node scripts/chatgpt_batch_web.js"
+  },
+  "keywords": [
+    "math",
+    "tutor",
+    "agent",
+    "electron"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^38.4.0"
+  },
+  "dependencies": {
+    "@langchain/core": "^1.1.44",
+    "@langchain/langgraph": "^1.2.9",
+    "pdf-parse": "^2.4.5",
+    "playwright-core": "^1.56.1"
+  }
+}

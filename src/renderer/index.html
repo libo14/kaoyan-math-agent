@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>考研数学 Agent</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script>
+      window.MathJax = {
+        tex: {
+          inlineMath: [["$", "$"], ["\\(", "\\)"]],
+          displayMath: [["$$", "$$"], ["\\[", "\\]"]],
+          processEscapes: true
+        },
+        svg: {
+          fontCache: "global"
+        },
+        startup: {
+          typeset: false
+        }
+      };
+    </script>
+    <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+  </head>
+  <body>
+    <div class="app">
+      <nav class="rail" aria-label="主导航">
+        <div class="brand-mark">Σ+</div>
+        <div class="nav">
+          <button class="nav-item active" type="button" data-page="home"><span>⌂</span><span>主页</span></button>
+          <button class="nav-item" type="button" data-page="dashboard"><span>▦</span><span>学习中枢</span></button>
+          <button class="nav-item" type="button" data-page="review"><span>☷</span><span>复习卡</span></button>
+          <button class="nav-item" type="button" data-page="favorites"><span>☆</span><span>收藏夹</span></button>
+          <button class="nav-item" type="button" data-page="settings"><span>⚙</span><span>设置</span></button>
+        </div>
+        <div class="user-mini"><span class="avatar">M</span><span>MathLearner</span></div>
+      </nav>
+
+      <aside class="side">
+        <div class="side-title">
+          <h1>考研数学 Agent</h1>
+          <p>本地题库优先命中，必要时调用模型进行导学式拓展。</p>
+        </div>
+
+        <section class="card settings">
+          <div class="card-head">
+            <h2>模型配置</h2>
+            <button id="saveConfigButton" class="icon-btn" title="保存配置" type="button">▣</button>
+          </div>
+
+          <label for="apiKeyInput">API Key</label>
+          <input id="apiKeyInput" type="password" placeholder="sk-..." autocomplete="off" />
+
+          <label for="baseUrlInput">API 地址</label>
+          <input id="baseUrlInput" type="text" value="https://api.siliconflow.cn/v1" />
+
+          <label for="modelInput">模型名称</label>
+          <input id="modelInput" type="text" value="Qwen/Qwen2.5-VL-32B-Instruct" />
+
+          <label for="temperatureInput">严格度</label>
+          <div class="range">
+            <span>宽松</span>
+            <input id="temperatureInput" type="range" min="0" max="0.8" step="0.05" value="0.25" />
+            <span>严格</span>
+          </div>
+        </section>
+
+        <section class="card history">
+          <div class="card-head">
+            <h2>最近解析</h2>
+            <button id="clearHistoryButton" class="clear" type="button">清空</button>
+          </div>
+          <div id="historyList" class="history-list"></div>
+        </section>
+      </aside>
+
+      <main class="main">
+        <!-- Home Page -->
+        <section class="hero">
+          <div>
+            <h2>把题目图片拖进来，Agent 直接<em>讲透。</em></h2>
+            <p>支持本地题库命中、短问题追问、知识点拓展和 LaTeX 公式渲染。</p>
+          </div>
+          <div class="hero-action">
+            <button id="solveButton" class="primary primary-button" type="button" disabled>开始解析</button>
+            <small>先查本地题库，未命中再调用模型</small>
+          </div>
+        </section>
+
+        <section id="learningStats" class="stats-strip" aria-label="学习概览">
+          <div class="stat-tile">
+            <span>本地题库</span>
+            <strong id="bankQuestionCount">--</strong>
+          </div>
+          <div class="stat-tile">
+            <span>RAG 切片</span>
+            <strong id="bankChunkCount">--</strong>
+          </div>
+          <div class="stat-tile">
+            <span>今日待复习</span>
+            <strong id="dueReviewCount">0</strong>
+          </div>
+          <div class="stat-tile">
+            <span>收藏资料</span>
+            <strong id="favoriteCount">0</strong>
+          </div>
+        </section>
+
+        <section class="top-grid">
+          <div class="left-workspace">
+            <section class="card upload-box drop-zone" id="dropZone">
+              <input id="fileInput" type="file" accept="image/*" hidden />
+              <div id="emptyUpload" class="empty-upload">
+                <span class="upload-prompt">请上传图片</span>
+              </div>
+            </section>
+
+            <section class="card preview">
+              <div class="tabs">
+                <button class="tab active" type="button">原题图片</button>
+                <button class="tab" type="button">本地题库</button>
+                <button class="tab" type="button">导学拓展</button>
+              </div>
+              <div class="preview-body">
+                <img id="previewImage" class="preview-image uploaded-preview" alt="题目预览" hidden />
+                <div id="paperPreview" class="paper">
+                  <b>使用建议</b><br />
+                  输入「2020年第17题 为什么想到中心二项式系数？」可以先命中本地题库，再让模型围绕短问题拓展讲解。
+                </div>
+              </div>
+              <div class="preview-foot">
+                <div class="zoom"><span>−</span><b>100%</b><span>＋</span></div>
+                <button class="ghost" type="button">重新上传</button>
+              </div>
+            </section>
+          </div>
+
+          <section class="card ask-panel question-panel">
+            <div class="ask-main">
+              <h3>当前提问</h3>
+              <div class="textarea-wrap">
+                <textarea id="extraQuestionInput" maxlength="500" placeholder="例如：2020年第17题 为什么想到中心二项式系数？或者：讲一下泰勒公式在这题里的作用。"></textarea>
+                <span class="counter" id="questionCounter">0/500</span>
+              </div>
+              <div class="quick-title">下一步提问 <small>点击快速追问</small></div>
+              <div class="chips">
+                <button class="chip" type="button">这一步为什么这样变形？</button>
+                <button class="chip" type="button">能不能换一种方法？</button>
+                <button class="chip" type="button">对应考点是什么？</button>
+                <button class="chip" type="button">这里为什么能用泰勒公式？</button>
+                <button class="chip" type="button">给我一个同类题</button>
+                <button class="chip" type="button">这题容易错在哪？</button>
+              </div>
+            </div>
+
+            <div class="stepper agent-flow">
+              <div class="step-list">
+                <div class="step flow-step"><span class="num">1</span><span>识别题目</span></div>
+                <div class="step flow-step"><span class="num">2</span><span>匹配题库</span></div>
+                <div class="step flow-step"><span class="num">3</span><span>导学拓展</span></div>
+                <div class="step flow-step"><span class="num">4</span><span>生成复习卡</span></div>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section class="card result answer-panel">
+          <div class="result-top answer-header">
+            <div>
+              <p class="eyebrow">Agent 输出</p>
+              <h3>解析结果</h3>
+            </div>
+            <div class="tools">
+              <span id="statusText" class="status">等待题目</span>
+            </div>
+          </div>
+
+          <article id="answerOutput" class="answer-output">
+            <p class="placeholder">解析会显示在这里。命中本地题库时会优先使用已有答案；如果你写了具体疑问，会调用模型围绕本地答案做拓展讲解。</p>
+          </article>
+        </section>
+      </main>
+
+      <!-- Dashboard Page -->
+      <main id="dashboardPage" class="main page" style="display: none;">
+        <section class="page-header">
+          <h2>学习中枢</h2>
+          <p>把题库、复习、收藏和最近学习放在一起，帮你决定下一步学什么。</p>
+        </section>
+
+        <section id="dashboardOverview" class="dashboard-overview">
+          <div><span>本地题库</span><strong id="dashQuestionCount">--</strong><small>已入库真题解析</small></div>
+          <div><span>待复习</span><strong id="dashDueCount">0</strong><small>需要今天处理</small></div>
+          <div><span>收藏</span><strong id="dashFavoriteCount">0</strong><small>重点题目资料</small></div>
+          <div><span>掌握度</span><strong id="dashMasteryAvg">0%</strong><small>复习卡平均值</small></div>
+        </section>
+
+        <section class="stage-workbench">
+          <div class="stage-head">
+            <div>
+              <h3>阶段复习</h3>
+              <p id="stageDescription">基础阶段用于沉淀概念、公式、定理和入门题。</p>
+            </div>
+            <div class="stage-tabs" role="tablist" aria-label="学习阶段">
+              <button class="stage-tab active" type="button" data-stage="foundation">基础</button>
+              <button class="stage-tab" type="button" data-stage="intensive">强化</button>
+            </div>
+          </div>
+          <div class="stage-summary">
+            <div><span>阶段资料</span><strong id="stageMaterialCount">0</strong></div>
+            <div><span>知识资料</span><strong id="stageKnowledgeCount">0</strong></div>
+            <div><span>题目资料</span><strong id="stageQuestionCount">0</strong></div>
+          </div>
+          <div id="stageMaterialList" class="stage-material-list"></div>
+        </section>
+
+        <section class="dashboard-grid">
+          <article class="dashboard-panel">
+            <div class="panel-head">
+              <h3>今日复习</h3>
+              <button class="secondary small" type="button" data-dashboard-action="review">去复习</button>
+            </div>
+            <div id="dashboardDueList" class="compact-list"></div>
+          </article>
+
+          <article class="dashboard-panel">
+            <div class="panel-head">
+              <h3>薄弱与高频知识点</h3>
+              <button class="secondary small" type="button" data-dashboard-action="practice">生成练习</button>
+            </div>
+            <div id="dashboardKnowledgeList" class="tag-cloud"></div>
+          </article>
+
+          <article class="dashboard-panel">
+            <div class="panel-head">
+              <h3>最近学习</h3>
+              <button class="secondary small" type="button" data-dashboard-action="history">回到主页</button>
+            </div>
+            <div id="dashboardRecentList" class="compact-list"></div>
+          </article>
+
+          <article class="dashboard-panel">
+            <div class="panel-head">
+              <h3>下一步推荐</h3>
+              <button class="secondary small" type="button" data-dashboard-action="refresh">刷新</button>
+            </div>
+            <div id="dashboardRecommendList" class="recommend-list"></div>
+          </article>
+        </section>
+      </main>
+
+      <!-- Review Cards Page -->
+      <main id="reviewPage" class="main page" style="display: none;">
+        <section class="page-header">
+          <h2>复习卡片</h2>
+          <p>保存重要的解题思路和知识点，随时复习巩固。</p>
+        </section>
+
+        <section id="reviewSummary" class="review-summary">
+          <div><span>全部卡片</span><strong id="reviewTotalCount">0</strong></div>
+          <div><span>今日待复习</span><strong id="reviewDueCount">0</strong></div>
+          <div><span>平均掌握度</span><strong id="reviewMasteryAvg">0%</strong></div>
+        </section>
+
+        <section class="page-actions">
+          <button id="addReviewCardBtn" class="primary" type="button">添加当前解析</button>
+          <button id="clearReviewCardsBtn" class="ghost" type="button">清空所有</button>
+        </section>
+
+        <section id="reviewCardsList" class="cards-grid">
+          <p class="placeholder">还没有复习卡片。解析题目后可以添加到复习卡。</p>
+        </section>
+      </main>
+
+      <!-- Favorites Page -->
+      <main id="favoritesPage" class="main page" style="display: none;">
+        <section class="page-header">
+          <h2>收藏夹</h2>
+          <p>收藏经典题目和优质解析，方便重点复习。</p>
+        </section>
+
+        <section class="page-actions">
+          <button id="clearFavoritesBtn" class="ghost" type="button">清空所有</button>
+        </section>
+
+        <section id="favoritesList" class="cards-grid">
+          <p class="placeholder">还没有收藏题目。可以收藏解析结果以便复习。</p>
+        </section>
+      </main>
+
+      <!-- Settings Page -->
+      <main id="settingsPage" class="main page" style="display: none;">
+        <section class="page-header">
+          <h2>设置</h2>
+          <p>管理应用配置和数据。</p>
+        </section>
+
+        <section class="settings-section">
+          <h3>外观设置</h3>
+          <div class="setting-item">
+            <label for="themeSelect">主题模式</label>
+            <select id="themeSelect">
+              <option value="light">浅色模式</option>
+              <option value="dark">深色模式</option>
+            </select>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <h3>数据管理</h3>
+          <div class="setting-item">
+            <p>导出所有数据（配置、历史、复习卡、收藏夹）</p>
+            <button id="exportDataBtn" class="secondary" type="button">导出数据</button>
+          </div>
+          <div class="setting-item">
+            <p>从备份文件导入数据</p>
+            <button id="importDataBtn" class="secondary" type="button">导入数据</button>
+            <input id="importFileInput" type="file" accept=".json" hidden />
+          </div>
+          <div class="setting-item danger">
+            <p>清除所有本地数据（不可恢复）</p>
+            <button id="clearAllDataBtn" class="danger-btn" type="button">清除所有数据</button>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <h3>关于</h3>
+          <div class="about-info">
+            <p><strong>研数导学 Agent</strong> v0.1.0</p>
+            <p>考研数学智能辅导工具</p>
+            <p>支持本地题库匹配、AI 导学拓展、复习卡片管理</p>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>
