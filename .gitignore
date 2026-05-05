@@ -19,11 +19,31 @@ playwright-report/
 test-results/
 .cache/
 
-# User-owned or copyrighted exam data
+# Data policy
 data/raw/
-data/imports/
-data/processed/
 data/chatgpt_outputs/
+
+# Publish ChatGPT-generated Markdown imports, but keep images/PDFs local.
+data/imports/*
+!data/imports/
+!data/imports/*/
+!data/imports/**/*.md
+!data/imports/**/*.json
+data/imports/**/*.png
+data/imports/**/*.jpg
+data/imports/**/*.jpeg
+data/imports/**/*.pdf
+data/imports/**/pdf_pages/
+data/imports/**/extracted/
+
+# Publish text knowledge-base outputs, but keep binary caches local.
+data/processed/*
+!data/processed/
+!data/processed/README.md
+!data/processed/question_bank.jsonl
+!data/processed/rag_chunks.jsonl
+!data/processed/review_report.md
+data/processed/*.sqlite
 
 # Keep the tiny synthetic/demo dataset for open-source demos
 !data/processed-demo/

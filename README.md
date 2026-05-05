@@ -30,12 +30,12 @@
 
 ## 开源数据说明
 
-仓库内置一份小型 demo 数据，方便 clone 后直接跑通流程；完整题库可以在本地自行导入和构建。
+仓库包含两层数据：一层是用于快速跑通的 demo 数据，另一层是按年份分类的 ChatGPT 网页生成结构化解析及其 JSONL 知识库。
 
-- `data/processed-demo/`：可提交的小型演示数据，用于 clone 后跑通 demo。
+- `data/imports/`：按年份/数学类别分类的 ChatGPT 结构化 Markdown 解析。
+- `data/processed/`：由解析构建出的 `question_bank.jsonl` 与 `rag_chunks.jsonl`。
+- `data/processed-demo/`：小型演示数据，用于 clone 后跑通 demo。
 - `data/raw/`：本地原始题库目录，默认不纳入仓库。
-- `data/imports/`：本地导入文件目录，默认不纳入仓库。
-- `data/processed/`：完整本地构建题库目录，默认不纳入仓库。
 
 应用启动时会优先读取 `data/processed/`；如果不存在，则自动 fallback 到 `data/processed-demo/`。
 
@@ -100,10 +100,11 @@ https://nodejs.org/
 │   └── self_check.js          # 项目自检脚本
 ├── prompts/                   # 批量生成解析与手工入库提示词
 ├── data/
+│   ├── imports/               # ChatGPT 结构化 Markdown 解析
+│   ├── processed/             # JSONL 题库与 RAG 切片
 │   ├── processed-demo/        # 开源 demo 数据
 │   ├── raw/                   # 本地原始题库，默认忽略
-│   ├── imports/               # 本地导入资料，默认忽略
-│   └── processed/             # 本地完整题库，默认忽略
+│   └── raw-demo/              # demo 原始题目结构
 └── start-browser.bat          # Windows 浏览器版启动器
 ```
 
@@ -157,8 +158,9 @@ API 地址：https://api.openai.com/v1
 已入库内容会写入：
 
 - `data/processed/question_bank.jsonl`
-- `data/processed/question_bank.sqlite`
 - `data/processed/rag_chunks.jsonl`
+
+SQLite 文件只是本地缓存，不需要提交；浏览器版检索主要读取 JSONL。
 
 ## LangGraph Agent 架构
 
