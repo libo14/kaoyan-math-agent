@@ -69,10 +69,8 @@ data/imports/          # 按年份分类的结构化 Markdown 解析
 data/processed/        # 当前主知识库：question_bank.jsonl / rag_chunks.jsonl
 data/processed-demo/   # 小型 demo 数据
 data/raw-demo/         # demo 原始题目结构
-data/raw/              # 本地原始资料目录，默认不提交
+data/raw/              # 本地原始资料目录
 ```
-
-说明：仓库提交的是结构化文本知识库和 JSONL 检索数据；真实 API Key、`.env`、题目 PDF、截图图片、SQLite 缓存、`node_modules` 不纳入版本库。
 
 ## 快速启动
 
@@ -254,24 +252,6 @@ POST /api/solve
 POST /api/enhance-local-answer
 ```
 
-## 隐私与提交策略
-
-`.gitignore` 已排除：
-
-```text
-.env
-.env.*
-node_modules/
-.chatgpt-chrome-profile/
-data/raw/
-data/imports/**/*.pdf
-data/imports/**/*.png
-data/imports/**/*.jpg
-data/processed/*.sqlite
-```
-
-仓库保留 `.env.example` 作为配置模板，不提交真实 API Key。
-
 ## 后续计划
 
 - 增加真正的向量检索后端，补强知识点和题型相似度。
@@ -279,4 +259,3 @@ data/processed/*.sqlite
 - 增加学习记录统计、错题复习队列和间隔复习提醒。
 - 对题库解析质量做自动校验和人工修订标记。
 - 将视觉识题和题库检索结果做更清晰的可解释展示。
-
