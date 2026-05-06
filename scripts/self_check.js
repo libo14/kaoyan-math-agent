@@ -59,12 +59,25 @@ async function runChecks() {
     assert(actualId === expectedId, `本地检索命中错误：${query} -> ${actualId}, expected ${expectedId}`);
   }
 
-  const { response: agentLocalResponse, data: agentLocalData } = await postJson("/api/solve", {
-    extraQuestion: "2015年第1题"
+  const interpolationQuestion = "设函数 f(x) 具有 2 阶导数，g(x)=f(0)(1-x)+f(1)x，则在区间[0,1]上，这道题怎么做";
+  const { response: interpolationResponse, data: interpolationData } = await postJson("/api/local-answer", {
+    searchText: interpolationQuestion
   });
-  assert(agentLocalResponse.ok, "LangGraph Agent 本地题号命中失败");
-  assert(agentLocalData?.source?.id === "2015_math1_01", "LangGraph Agent 本地题号命中错误");
-  assert(agentLocalData?.agentTrace?.route === "direct_local", "LangGraph Agent 未走 0-token 本地命中路径");
+  assert(interpolationResponse.ok, "2014 线性插值选择题本地检索失败");
+  assert(
+    interpolationData?.source?.id === "2014_math1_02",
+    `2014 线性插值选择题命中错误：${interpolationData?.source?.id}`
+  );
+
+  const { response: imageOcrTextResponse, data: imageOcrTextData } = await postJson("/api/local-answer", {
+    searchText: "第5题",
+    disableQuestionNoDirect: true,
+    preferTextSearch: true
+  });
+  assert(
+    !imageOcrTextResponse.ok || imageOcrTextData?.source?.id !== "2005_math1_05",
+    "图片 OCR 路径不应只凭题号直接命中本地题库"
+  );
 
   const { response: agentSimilarResponse, data: agentSimilarData } = await postJson("/api/solve", {
     extraQuestion: "给我推荐一道泰勒公式同类题"

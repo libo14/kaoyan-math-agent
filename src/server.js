@@ -26,6 +26,13 @@ function normalizeBaseUrl(input) {
   return `${value.replace(/\/$/, "")}/chat/completions`;
 }
 
+function normalizeModelsUrl(input) {
+  const value = (input || "https://api.openai.com/v1").trim().replace(/\/$/, "");
+  if (value.endsWith("/chat/completions")) return value.replace(/\/chat\/completions$/, "/models");
+  if (value.endsWith("/models")) return value;
+  return `${value}/models`;
+}
+
 function buildSystemPrompt() {
   return [
     "你是一个考研数学导学 Agent，目标是帮助用户快速看懂题目并学会这类题。",
@@ -171,14 +178,9 @@ function inferYearAndQuestionNo(text) {
     : shortYearMatch
       ? 2000 + Number(shortYearMatch[1])
       : null;
-  const withoutYear = compact
-    .replace(/(19|20)\d{2}/g, " ")
-    .replace(/(?:^|[^\d])\d{2}年/g, " ");
-  const numberMatches = [...withoutYear.matchAll(/(?:^|[^\d])(\d{1,2})(?=$|[^\d])/g)]
-    .map((match) => Number(match[1]));
   return {
     year: inferredYear,
-    questionNo: questionNo || numberMatches.at(-1) || null,
+    questionNo: questionNo || null,
   };
 }
 
@@ -411,7 +413,10 @@ function buildRecordSearchText(record) {
 
 function findByTextSearch(bank, query) {
   const best = searchQuestionBank(bank, query, { includeUnknownYear: false })[0];
-  if (!best || best.score < 2) return null;
+  const tokens = extractSearchTokens(query);
+  const meaningfulTokens = tokens.filter((token) => !["题", "道题", "怎么", "如何", "解析", "解"].includes(token));
+  if (meaningfulTokens.length < 2) return null;
+  if (!best || best.score < 4.2) return null;
   return {
     record: best.record,
     method: "weighted_text_search",
@@ -527,6 +532,10 @@ function getQuestionBankStats() {
 function findLocalAnswer(payload) {
   const fileName = normalizeFileName(payload?.fileName);
   const imageHash = normalizeHash(payload?.imageHash);
+  const allowImageHash = Boolean(payload?.allowImageHash);
+  const allowFileName = Boolean(payload?.allowFileName);
+  const disableQuestionNoDirect = Boolean(payload?.disableQuestionNoDirect);
+  const preferTextSearch = Boolean(payload?.preferTextSearch);
   const textInferred = inferYearAndQuestionNo(payload?.searchText || "");
   const fileInferred = inferYearAndQuestionNo(payload?.fileName || "");
   const inferred = {
@@ -539,7 +548,12 @@ function findLocalAnswer(payload) {
   let record = null;
   let match = null;
 
-  if (textInferred.questionNo) {
+  if (preferTextSearch && payload?.searchText) {
+    match = findByTextSearch(bank, payload.searchText);
+    record = match?.record || null;
+  }
+
+  if (!record && textInferred.questionNo && !disableQuestionNoDirect) {
     const candidates = bank.filter((item) => Number(item?.metadata?.question_no) === textInferred.questionNo);
     record = candidates.find((item) => inferred.year && Number(item?.metadata?.year) === inferred.year)
       || candidates.find((item) => item?.metadata?.subject === "数一")
@@ -548,7 +562,7 @@ function findLocalAnswer(payload) {
     if (record) match = { record, method: "search_text_question_no", distance: 0 };
   }
 
-  if (!record && imageHash) {
+  if (!record && imageHash && allowImageHash) {
     for (const item of bank) {
       const hashes = [
         item?.metadata?.image_hash,
@@ -558,7 +572,7 @@ function findLocalAnswer(payload) {
 
       for (const candidateHash of hashes) {
         const distance = hammingDistanceHex(imageHash, candidateHash);
-        if (distance <= 8 && (!match || distance < match.distance)) {
+        if (distance <= 2 && (!match || distance < match.distance)) {
           match = {
             record: item,
             distance,
@@ -570,7 +584,7 @@ function findLocalAnswer(payload) {
     record = match?.record || null;
   }
 
-  if (!record && fileName) {
+  if (!record && fileName && allowFileName) {
     record = record || bank.find((item) => {
       const metaFile = normalizeFileName(item?.metadata?.image_file);
       const imagePath = normalizeFileName(item?.image_path);
@@ -584,7 +598,7 @@ function findLocalAnswer(payload) {
     record = match?.record || null;
   }
 
-  if (!record) {
+  if (!record && !disableQuestionNoDirect) {
     const questionNo = Number(inferred.questionNo || 0);
     const candidates = bank.filter((item) => questionNo && Number(item?.metadata?.question_no) === questionNo);
     record = candidates.find((item) => inferred.year && Number(item?.metadata?.year) === inferred.year)
@@ -623,9 +637,9 @@ function classifyLearningIntent(text, hasImage = false) {
   const value = String(text || "");
   if (/同类|类似|推荐.*题|练习|变式/.test(value)) return "similar_practice";
   if (/易错|错在哪|陷阱|误区/.test(value)) return "pitfall";
-  if (/为什么|这一步|变形|怎么想到|能不能|换一种|推导/.test(value)) return "explain_step";
+  if (/为什么|这一步|变形|怎么想到|能不能|换一种|另一种|其他解法|别的解法|有没有|推导/.test(value)) return "explain_step";
   if (/复习|知识点|考点|公式|定理|概念|讲一下|总结/.test(value)) return "knowledge";
-  if (hasImage || /完整|解析|解答|证明|求/.test(value)) return "full_solve";
+  if (hasImage || /完整|解析|解答|证明|求|怎么做|怎么解|咋做|咋解/.test(value)) return "full_solve";
   return "general_learning";
 }
 
@@ -641,6 +655,25 @@ function hasLearningQuestion(text) {
 function findRecordById(id) {
   if (!id) return null;
   return loadQuestionBank().find((item) => item.id === id) || null;
+}
+
+function buildLocalAnswerFromRecord(record) {
+  if (!record) return null;
+  const answer = record.answers?.gpt?.raw || record.answers?.gemini?.raw;
+  if (!answer) return null;
+  return {
+    content: answer,
+    model: "local-question-bank",
+    createdAt: new Date().toISOString(),
+    source: {
+      id: record.id,
+      metadata: record.metadata,
+      reviewNeeded: record.review_needed,
+      knowledgePoints: record.knowledge_points || [],
+      matchMethod: "source_context",
+      imageHashDistance: null,
+    }
+  };
 }
 
 function buildLeanLocalContext(record, intent) {
@@ -712,17 +745,18 @@ function buildSimilarQuestionsMarkdown(items) {
 
 function buildAgentSystemPrompt(mode) {
   const base = [
-    "你是考研数学学习 Agent，必须节省 token，并优先使用本地资料。",
-    "本地资料来自用户题库或个人阶段资料，优先级高于你重新生成的答案。",
-    "不要重新解整题，除非没有本地资料或用户明确要求完整解答。",
+    "你是考研数学学习 Agent，必须优先使用本地资料作为高质量参考，再结合用户问题生成回答。",
+    "本地资料来自用户题库或个人阶段资料，优先级高于你自由发挥的答案。",
+    "如果用户是在首次解析题目，请基于本地资料给出完整、清晰、可复习的讲解；如果用户是在追问，只回答追问的局部问题。",
     "输出中文，公式使用合法 LaTeX。行内公式用 \\(...\\)，独立公式用 \\[...\\]。",
   ];
 
   if (mode === "local_enhance") {
     return [
       ...base,
-      "你会收到本地解析的相关切片。只回答用户问到的局部问题。",
-      "严格控制篇幅：默认 600 字以内；若必须列步骤，最多 5 步。",
+      "你会收到本地解析的相关切片。先判断用户是在首次求解还是继续追问。",
+      "首次求解时：可以整理成本题答案，但不要偏离本地资料。",
+      "继续追问时：严格围绕追问回答，默认 800 字以内，必要时给出另一种方法或局部解释。",
       "结构：直接回答、对应本题位置、关键步骤、易错提醒、迁移复习。"
     ].join("\n");
   }
@@ -734,10 +768,13 @@ function buildAgentSystemPrompt(mode) {
   ].join("\n");
 }
 
-function buildAgentUserPrompt({ intent, userQuestion, localContext, similarMarkdown, hasImage }) {
+function buildAgentUserPrompt({ intent, userQuestion, localContext, similarMarkdown, hasImage, followUpContext }) {
   return [
     `任务类型：${intent}`,
     `是否上传图片：${hasImage ? "是" : "否"}`,
+    followUpContext ? "当前解析上下文：" : "",
+    followUpContext ? compactText(followUpContext, 2600) : "",
+    followUpContext ? "" : "",
     "",
     "本地资料切片：",
     localContext || "无",
@@ -750,6 +787,90 @@ function buildAgentUserPrompt({ intent, userQuestion, localContext, similarMarkd
   ].join("\n");
 }
 
+function buildImageRecognitionPrompt(userQuestion) {
+  return [
+    "请只做题目识别，不要解答。",
+    "把图片中的考研数学题完整转写为 Markdown。",
+    "要求：",
+    "1. 保留题号、小问、选项、已知条件、求解目标。",
+    "2. 数学公式使用合法 LaTeX。",
+    "3. 行内公式必须写成单反斜杠定界符：\\( ... \\)。不要输出双反斜杠，不要写成 \\\\( ... \\\\)。",
+    "4. 独立公式必须写成单反斜杠定界符：\\[ ... \\]。不要输出双反斜杠，不要写成 \\\\[ ... \\\\]。",
+    "5. 普通区间如 [0,1] 不要放进公式环境。",
+    "6. 选项里的公式也要使用正常 LaTeX，例如 \\(f'(x)\\ge 0\\)。",
+    "7. 普通函数名不要写成 LaTeX 命令：必须写 f(x)、g(x)，不要写 \\f(x)、\\g(x)。",
+    "8. 不要使用代码块，不要包裹 ```markdown。",
+    "9. 看不清的位置标注“疑似”。",
+    "10. 不要输出解题过程、知识点或答案。",
+    userQuestion ? `用户补充说明：${userQuestion}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+function normalizeRecognizedQuestionText(text) {
+  let value = String(text || "")
+    .replace(/\\\\\(/g, "\\(")
+    .replace(/\\\\\)/g, "\\)")
+    .replace(/\\\\\[/g, "\\[")
+    .replace(/\\\\\]/g, "\\]")
+    .replace(/\\([fFgGuUvV])(?=[\('’′_^{])/g, "$1")
+    .replace(/\\([a-zA-Z])(?=\s*\()/g, "$1")
+    .replace(/\\([a-zA-Z])(?=\s*[+\-=,，。；;、]|$)/g, "$1")
+    .replace(/\\\s+(?=[,.;:，。；：、])/g, "")
+    .replace(/\\\s+(?=[）\)]) /g, "")
+    .replace(/\\\(([[(（【][^\n]*?[\])）】])\\\)/g, "$1")
+    .replace(/\\\(\s*([A-D])\s*\\\)/g, "($1)")
+    .replace(/\\\(\s*([0-9]+)\s*\\\)/g, "($1)")
+    .replace(/\\\((\[[0-9a-zA-Z,+\\-\\s]+,[0-9a-zA-Z,+\\-\\s]+\])\\\)/g, "$1");
+
+  let repaired = "";
+  let inInlineMath = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const current = value[index];
+    const next = value[index + 1] || "";
+    if (current === "\\" && next === "(") {
+      inInlineMath = true;
+      repaired += "\\(";
+      index += 1;
+      continue;
+    }
+    if (current === "\\" && next === ")") {
+      inInlineMath = false;
+      repaired += "\\)";
+      index += 1;
+      continue;
+    }
+    if (inInlineMath && current === "\\" && (/[\s,，.。;；:：、\u4e00-\u9fa5]/.test(next) || !next)) {
+      inInlineMath = false;
+      repaired += "\\)";
+      continue;
+    }
+    repaired += current;
+  }
+  if (inInlineMath) repaired += "\\)";
+
+  return repaired
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function normalizeModelContent(content) {
+  if (typeof content === "string") return content.trim();
+  if (Array.isArray(content)) {
+    return content.map((item) => {
+      if (typeof item === "string") return item;
+      if (typeof item?.text === "string") return item.text;
+      if (typeof item?.content === "string") return item.content;
+      if (typeof item?.value === "string") return item.value;
+      return "";
+    }).filter(Boolean).join("\n").trim();
+  }
+  if (content && typeof content === "object") {
+    return normalizeModelContent(content.text || content.content || content.value || "");
+  }
+  return "";
+}
+
 async function callChatCompletion({ apiKey, baseUrl, model, temperature, maxTokens, messages }) {
   if (!apiKey || !apiKey.trim()) {
     throw new Error("需要调用模型时，请先填写你的大模型 API Key。");
@@ -757,18 +878,30 @@ async function callChatCompletion({ apiKey, baseUrl, model, temperature, maxToke
 
   const targetUrl = normalizeBaseUrl(baseUrl);
   const chosenModel = (model || "deepseek-v4-flash").trim();
+  const isXiaomi = /xiaomimimo\.com/i.test(targetUrl);
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${apiKey.trim()}`
+  };
+  if (isXiaomi) {
+    headers["api-key"] = apiKey.trim();
+  }
+  const body = {
+    model: chosenModel,
+    temperature: Number.isFinite(Number(temperature)) ? Number(temperature) : 0.2,
+    messages
+  };
+  if (isXiaomi) {
+    body.max_completion_tokens = maxTokens;
+    body.thinking = { type: "disabled" };
+    body.stream = false;
+  } else {
+    body.max_tokens = maxTokens;
+  }
   const response = await fetch(targetUrl, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey.trim()}`
-    },
-    body: JSON.stringify({
-      model: chosenModel,
-      temperature: Number.isFinite(Number(temperature)) ? Number(temperature) : 0.2,
-      max_tokens: maxTokens,
-      messages
-    })
+    headers,
+    body: JSON.stringify(body)
   });
 
   const data = await response.json().catch(() => null);
@@ -777,9 +910,102 @@ async function callChatCompletion({ apiKey, baseUrl, model, temperature, maxToke
     throw new Error(`模型请求失败：${detail}`);
   }
 
-  const content = data?.choices?.[0]?.message?.content;
-  if (!content) throw new Error("模型没有返回可展示的内容。");
+  const choice = data?.choices?.[0] || {};
+  const message = choice.message || {};
+  const content = normalizeModelContent(message.content)
+    || normalizeModelContent(message.reasoning_content)
+    || normalizeModelContent(choice.text)
+    || normalizeModelContent(data?.output_text);
+  if (!content) {
+    const finishReason = choice.finish_reason ? ` finish_reason=${choice.finish_reason}` : "";
+    throw new Error(`模型没有返回可展示的内容。${finishReason}`);
+  }
   return { content, model: chosenModel, usage: data?.usage || null };
+}
+
+async function listAvailableModels({ apiKey, baseUrl }) {
+  if (!apiKey || !apiKey.trim()) {
+    throw new Error("刷新可用模型前，请先填写 API Key。");
+  }
+  const targetUrl = normalizeModelsUrl(baseUrl);
+  const response = await fetch(targetUrl, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${apiKey.trim()}`
+    }
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = data?.error?.message || data?.message || response.statusText;
+    throw new Error(`获取模型列表失败：${detail}`);
+  }
+  const rawModels = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+  const models = rawModels
+    .map((item) => typeof item === "string" ? item : item?.id)
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+  if (!models.length) {
+    throw new Error("服务商没有返回可用模型列表，请手动填写模型名称。");
+  }
+  return {
+    models,
+    count: models.length,
+    createdAt: new Date().toISOString()
+  };
+}
+
+async function recognizeImageQuestion(payload) {
+  const { apiKey, baseUrl, model, imageDataUrl, extraQuestion } = payload || {};
+  if (!imageDataUrl) {
+    throw new Error("请先上传题目图片。");
+  }
+  const modelResult = await callChatCompletion({
+    apiKey,
+    baseUrl,
+    model: model || "deepseek-v4-flash",
+    temperature: 0,
+    maxTokens: 1400,
+    messages: [
+      {
+        role: "system",
+        content: [
+          "你是考研数学题目 OCR Agent。",
+          "你的唯一任务是把图片中的题目完整、准确地转写出来。",
+          "不要解题，不要总结知识点，不要给答案。",
+          "数学公式必须使用合法 LaTeX：行内公式用 \\(...\\)，独立公式用 \\[...\\]。",
+          "数字、上下标、导数阶数、不等号方向、区间端点、选项字母必须逐项核对。",
+          "如果看不清，必须在对应位置标注“疑似”，不能猜。"
+        ].join("\n")
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: buildImageRecognitionPrompt(extraQuestion)
+          },
+          {
+            type: "image_url",
+            image_url: {
+              url: imageDataUrl,
+              detail: "high"
+            }
+          }
+        ]
+      }
+    ]
+  });
+  if (/没有.{0,6}(图片|图像)|未.{0,6}(提供|上传).{0,6}(图片|图像)|no image|without image/i.test(modelResult.content)) {
+    throw new Error(`当前模型没有接收到图片输入。请在设置里选择真正支持图片的视觉模型，例如硅基流动 Qwen/Qwen2.5-VL-32B-Instruct，或 MiMo 的多模态/Omni 模型。当前模型：${modelResult.model}`);
+  }
+  const recognizedQuestion = normalizeRecognizedQuestionText(modelResult.content);
+  return {
+    recognizedQuestion,
+    rawRecognizedQuestion: modelResult.content,
+    model: modelResult.model,
+    usage: modelResult.usage,
+    createdAt: new Date().toISOString()
+  };
 }
 
 let learningAgentGraphPromise = null;
@@ -792,7 +1018,10 @@ async function getLearningAgentGraph() {
     const WorkflowState = Annotation.Root({
       payload: Annotation({ reducer: (_left, right) => right, default: () => ({}) }),
       intent: Annotation({ reducer: (_left, right) => right, default: () => "general_learning" }),
+      isFollowUp: Annotation({ reducer: (_left, right) => right, default: () => false }),
       userQuestion: Annotation({ reducer: (_left, right) => right, default: () => "" }),
+      followUpContext: Annotation({ reducer: (_left, right) => right, default: () => "" }),
+      recognizedQuestion: Annotation({ reducer: (_left, right) => right, default: () => "" }),
       hasImage: Annotation({ reducer: (_left, right) => right, default: () => false }),
       localAnswer: Annotation({ reducer: (_left, right) => right, default: () => null }),
       localRecord: Annotation({ reducer: (_left, right) => right, default: () => null }),
@@ -806,23 +1035,78 @@ async function getLearningAgentGraph() {
       const payload = state.payload || {};
       const userQuestion = String(payload.extraQuestion || "").trim();
       const hasImage = Boolean(payload.imageDataUrl);
+      const isFollowUp = Boolean(payload.followUp);
       return {
         userQuestion,
         hasImage,
-        intent: classifyLearningIntent(userQuestion, hasImage),
+        isFollowUp,
+        followUpContext: String(payload.currentAnswerContext || "").trim(),
+        intent: isFollowUp ? classifyLearningIntent(userQuestion, false) : classifyLearningIntent(userQuestion, hasImage),
+      };
+    };
+
+    const recognizeImageNode = async (state) => {
+      if (state.payload?.recognizedQuestion) {
+        return { recognizedQuestion: String(state.payload.recognizedQuestion).trim() };
+      }
+      if (!state.hasImage) return { recognizedQuestion: "" };
+      const payload = state.payload || {};
+      const modelResult = await callChatCompletion({
+        apiKey: payload.apiKey,
+        baseUrl: payload.baseUrl,
+        model: payload.model || "deepseek-v4-flash",
+        temperature: 0,
+        maxTokens: 900,
+        messages: [
+          {
+            role: "system",
+            content: "你是考研数学题目 OCR Agent。只识别题干，不解题。"
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: buildImageRecognitionPrompt(state.userQuestion)
+              },
+              {
+                type: "image_url",
+                image_url: {
+                  url: payload.imageDataUrl,
+                  detail: "low"
+                }
+              }
+            ]
+          }
+        ]
+      });
+      return {
+        recognizedQuestion: normalizeRecognizedQuestionText(modelResult.content),
+        debug: {
+          ...(state.debug || {}),
+          recognizedQuestion: normalizeRecognizedQuestionText(modelResult.content),
+          rawRecognizedQuestion: modelResult.content,
+          recognitionModel: modelResult.model,
+        }
       };
     };
 
     const retrieveNode = async (state) => {
       const payload = state.payload || {};
+      const searchText = state.hasImage
+        ? String(state.recognizedQuestion || "").trim()
+        : String(state.userQuestion || "").trim();
       const searchPayload = {
-        ...payload,
-        searchText: state.userQuestion,
+        searchText,
+        questionNo: payload.questionNo,
+        disableQuestionNoDirect: state.hasImage,
+        preferTextSearch: state.hasImage,
       };
-      const localAnswer = findLocalAnswer(searchPayload);
-      const localRecord = findRecordById(localAnswer?.source?.id);
+      const contextRecord = state.isFollowUp ? findRecordById(payload.sourceQuestionId) : null;
+      const localAnswer = contextRecord ? buildLocalAnswerFromRecord(contextRecord) : findLocalAnswer(searchPayload);
+      const localRecord = contextRecord || findRecordById(localAnswer?.source?.id);
       const similarQuestions = findSimilarQuestions({
-        query: state.userQuestion,
+        query: searchText || state.userQuestion,
         sourceId: localRecord?.id || "",
         limit: state.intent === "similar_practice" ? 6 : 4,
       });
@@ -834,8 +1118,11 @@ async function getLearningAgentGraph() {
     };
 
     const decideNode = async (state) => {
-      if (state.localAnswer && !hasLearningQuestion(state.userQuestion)) {
-        return { route: "direct_local" };
+      if (state.isFollowUp && state.localRecord) {
+        return { route: "local_enhance" };
+      }
+      if (state.isFollowUp) {
+        return { route: "model_solve" };
       }
       if (state.intent === "similar_practice" && state.similarQuestions?.length) {
         return { route: "direct_similar" };
@@ -913,6 +1200,7 @@ async function getLearningAgentGraph() {
               localContext,
               similarMarkdown,
               hasImage: state.hasImage,
+              followUpContext: state.followUpContext,
             })
           }
         ]
@@ -929,6 +1217,7 @@ async function getLearningAgentGraph() {
             graph: "learning-agent",
             route: "local_enhance",
             intent: state.intent,
+            isFollowUp: state.isFollowUp,
             tokenPolicy: "lean local sections only",
           },
         }
@@ -948,6 +1237,7 @@ async function getLearningAgentGraph() {
               type: "text",
               text: [
                 "请解析这道考研数学题。",
+                state.recognizedQuestion ? `图片识别题干：\n${state.recognizedQuestion}` : "",
                 state.userQuestion ? `用户补充问题：${state.userQuestion}` : "",
                 "请先识别题目，再给知识点和完整解答。"
               ].filter(Boolean).join("\n")
@@ -966,6 +1256,7 @@ async function getLearningAgentGraph() {
             localContext: "",
             similarMarkdown,
             hasImage: false,
+            followUpContext: state.followUpContext,
           });
 
       const modelResult = await callChatCompletion({
@@ -990,7 +1281,9 @@ async function getLearningAgentGraph() {
             graph: "learning-agent",
             route: "model_solve",
             intent: state.intent,
+            isFollowUp: state.isFollowUp,
             tokenPolicy: state.hasImage ? "image solve" : "text learning prompt",
+            recognizedQuestion: state.recognizedQuestion || "",
           },
         }
       };
@@ -998,6 +1291,7 @@ async function getLearningAgentGraph() {
 
     return new StateGraph(WorkflowState)
       .addNode("parse_intent", parseIntentNode)
+      .addNode("recognize_image", recognizeImageNode)
       .addNode("retrieve", retrieveNode)
       .addNode("decide", decideNode)
       .addNode("direct_local", directLocalNode)
@@ -1005,7 +1299,8 @@ async function getLearningAgentGraph() {
       .addNode("local_enhance", localEnhanceNode)
       .addNode("model_solve", modelSolveNode)
       .addEdge(START, "parse_intent")
-      .addEdge("parse_intent", "retrieve")
+      .addEdge("parse_intent", "recognize_image")
+      .addEdge("recognize_image", "retrieve")
       .addEdge("retrieve", "decide")
       .addConditionalEdges("decide", (state) => state.route, {
         direct_local: "direct_local",
@@ -1245,6 +1540,34 @@ const server = http.createServer(async (req, res) => {
         });
         return;
       }
+      sendJson(res, 200, result);
+    } catch (error) {
+      sendJson(res, 400, {
+        error: error.message || String(error)
+      });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/models") {
+    try {
+      const rawBody = await readRequestBody(req);
+      const payload = JSON.parse(rawBody);
+      const result = await listAvailableModels(payload);
+      sendJson(res, 200, result);
+    } catch (error) {
+      sendJson(res, 400, {
+        error: error.message || String(error)
+      });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/recognize-image") {
+    try {
+      const rawBody = await readRequestBody(req);
+      const payload = JSON.parse(rawBody);
+      const result = await recognizeImageQuestion(payload);
       sendJson(res, 200, result);
     } catch (error) {
       sendJson(res, 400, {
