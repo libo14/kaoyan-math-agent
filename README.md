@@ -20,7 +20,11 @@
 
 ## 当前完成情况
 
-- **移动端优先前端**：米白色类 App 页面，桌面浏览器中居中显示，后续方便迁移到 Android WebView / Hybrid App。
+- **Android 原生 App**：已完成 Kotlin + Jetpack Compose 版本，支持真机安装测试，仓库内提供 debug APK。
+- **拍照 / 相册识题**：Android 端支持相机、相册图片输入，发送前会压缩缩放，降低移动端 OOM 和请求体过大的风险。
+- **Android 学习闭环**：支持解析、继续追问、一键收藏整段追问、基础 / 强化 / 收藏 / 复习卡 / 追问合集与 SM-2 间隔复习。
+- **移动端阅读体验**：内置 MathJax + WebView 渲染 LaTeX，追问页支持原题与原答案折叠展示，避免阅读区拥挤。
+- **移动端优先 Web 原型**：米白色类 App 页面，桌面浏览器中居中显示，用于快速验证交互和桌面端流程。
 - **首次 API 配置**：支持 API Key、API 地址、模型名称配置，内置 DeepSeek、硅基流动、Xiaomi MiMo 等 OpenAI-compatible 服务商预设。
 - **图片题目识别**：上传图片后先调用视觉模型识别题干，并在同一个预览框内提供 LaTeX 渲染预览和编辑模式。
 - **文字提问入口**：没有图片也可以直接输入题号、知识点或学习问题。
@@ -34,6 +38,7 @@
 
 ## 技术栈
 
+- **Android**：Kotlin、Jetpack Compose、Material 3、Room、KSP、OkHttp、AndroidX Security Crypto、WebView、MathJax
 - **前端**：原生 HTML / CSS / JavaScript，MathJax 渲染 LaTeX
 - **后端**：Node.js 原生 HTTP Server
 - **Agent 工作流**：LangGraph JS
@@ -42,6 +47,24 @@
 - **模型接口**：OpenAI-compatible Chat Completions
 - **桌面原型**：Electron 入口保留，当前推荐使用浏览器版
 - **数据构建**：Python 脚本将结构化 Markdown 解析构建为 `question_bank.jsonl` 与 `rag_chunks.jsonl`
+
+## Android APK
+
+当前仓库已包含可安装到安卓手机的 debug APK：
+
+```text
+android/apk/kaoyan-math-agent-debug.apk
+```
+
+APK 信息：
+
+```text
+最后更新时间：2026/5/21 06:06:52
+大小：12,011,480 bytes
+SHA256：5D092F5AA54D5864AD28BFA9848BEC2A51A915E025D91A6D79173DBE7B4DF54A
+```
+
+说明：该 APK 使用 Android debug key 签名，适合真机安装测试；正式分发前应改用 release 签名与版本号管理。
 
 ## 数据范围
 
@@ -104,7 +127,7 @@ start-browser.bat
 npm start
 ```
 
-当前推荐优先使用浏览器版，因为浏览器版已经接入完整本地题库、RAG 检索和 LangGraph 工作流。
+当前桌面 / Web 推荐优先使用浏览器版，因为浏览器版已经接入完整本地题库、RAG 检索和 LangGraph 工作流。Android 真机测试可直接安装仓库中的 debug APK。
 
 ## 模型配置
 
@@ -171,6 +194,7 @@ flowchart TD
 - 强化阶段：综合题、证明题、技巧题、易错题、同类题训练
 - 复习卡：已集成到中枢
 - 收藏夹：保存重要解析或资料
+- 追问合集：首答与多轮追问可一键收藏，后续追问自动追加
 - 资料点击后可重新载入到学习页继续追问
 
 前端本地数据主要保存在浏览器 `localStorage`：
@@ -255,7 +279,7 @@ POST /api/enhance-local-answer
 ## 后续计划
 
 - 增加真正的向量检索后端，补强知识点和题型相似度。
-- 为 Android 端封装 WebView / Capacitor 版本。
-- 增加学习记录统计、错题复习队列和间隔复习提醒。
+- 为 Android 端增加 release 签名、版本升级包和自动构建流程。
+- 增加更完整的学习记录统计、错题复习提醒和复习日历。
 - 对题库解析质量做自动校验和人工修订标记。
 - 将视觉识题和题库检索结果做更清晰的可解释展示。
