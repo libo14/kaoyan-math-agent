@@ -63,3 +63,7 @@ Thumbs.db
 dist/
 out/
 release/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties

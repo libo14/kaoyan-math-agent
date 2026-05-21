@@ -113,6 +113,14 @@
                 <button id="saveReviewButton" class="mini-action" type="button">复习卡</button>
                 <button id="saveFavoriteButton" class="mini-action" type="button">收藏</button>
               </div>
+              <div id="masteryBar" class="mastery-bar" hidden>
+                <span class="mastery-label">掌握度</span>
+                <button class="mastery-btn" data-mastery="mastered" type="button">我懂了</button>
+                <button class="mastery-btn" data-mastery="learning" type="button">还不会</button>
+                <button class="mastery-btn" data-mastery="needs_review" type="button">需复习</button>
+                <span id="masteryDisplay" class="mastery-display"></span>
+              </div>
+              <div id="tokenUsage" class="token-usage" hidden></div>
               <div id="answerContent" class="answer-content">
                 <h3>题目识别</h3>
                 <p>上传图片或输入题号后，系统会先检索本地题库。</p>
@@ -137,6 +145,13 @@
                 <button class="segment active" type="button" data-hub-panel="foundation">基础</button>
                 <button class="segment" type="button" data-hub-panel="intensive">强化</button>
                 <button class="segment" type="button" data-hub-panel="review">复习卡</button>
+              </div>
+              <div class="mastery-filter">
+                <button class="mastery-filter-btn active" type="button" data-mastery-filter="all">全部</button>
+                <button class="mastery-filter-btn" type="button" data-mastery-filter="mastered">已掌握</button>
+                <button class="mastery-filter-btn" type="button" data-mastery-filter="learning">学习中</button>
+                <button class="mastery-filter-btn" type="button" data-mastery-filter="needs_review">需复习</button>
+                <button class="mastery-filter-btn" type="button" data-mastery-filter="new">未标记</button>
               </div>
               <div id="hubList" class="mobile-list"></div>
             </article>
@@ -177,8 +192,27 @@
               </label>
               <button id="refreshModelsButton" class="outline-button slim-button" type="button">刷新真实可用模型</button>
               <label class="settings-field">
-                <span>模型名称 / 手动填写</span>
+                <span>默认模型（文字解析）</span>
                 <input id="settingsModel" type="text" placeholder="deepseek-chat" />
+              </label>
+              <label class="settings-field">
+                <span>视觉模型（图片识别）</span>
+                <input id="settingsVisionModel" type="text" placeholder="留空则使用默认模型" />
+              </label>
+              <p class="helper">图片识别需要多模态视觉模型，如 Qwen2.5-VL、mimo-v2.5 等。纯文本推理模型（如 mimo-v2.5-pro）无法识图。</p>
+              <label class="settings-field">
+                <span>推理模型（文字追问）</span>
+                <input id="settingsTextModel" type="text" placeholder="留空则使用默认模型" />
+              </label>
+              <p class="helper">追问和文字解题可选用推理更强的模型，如 DeepSeek Reasoner、mimo-v2.5-pro 等。</p>
+              <label class="settings-field settings-toggle-row">
+                <div>
+                  <span>多轮对话上下文</span>
+                  <p class="helper" style="margin-top:4px">开启后追问时发送完整对话历史（user/assistant 交替），模型理解更准确，但消耗更多 token。关闭时只发送摘要文本。</p>
+                </div>
+                <button id="multiTurnToggle" class="toggle-switch" type="button" role="switch" aria-checked="false">
+                  <span class="toggle-knob"></span>
+                </button>
               </label>
               <div class="settings-actions">
                 <button id="saveSettingsButton" class="outline-button">保存配置</button>

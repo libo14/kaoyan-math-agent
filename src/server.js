@@ -787,6 +787,20 @@ function buildAgentUserPrompt({ intent, userQuestion, localContext, similarMarkd
   ].join("\n");
 }
 
+function buildMultiTurnMessages(systemPrompt, conversationHistory, currentUserMessage) {
+  const messages = [{ role: "system", content: systemPrompt }];
+  if (Array.isArray(conversationHistory)) {
+    for (const turn of conversationHistory) {
+      if (turn.role === "user" || turn.role === "assistant") {
+        const content = String(turn.content || "").trim();
+        if (content) messages.push({ role: turn.role, content });
+      }
+    }
+  }
+  messages.push({ role: "user", content: currentUserMessage });
+  return messages;
+}
+
 function buildImageRecognitionPrompt(userQuestion) {
   return [
     "请只做题目识别，不要解答。",
@@ -1021,6 +1035,8 @@ async function getLearningAgentGraph() {
       isFollowUp: Annotation({ reducer: (_left, right) => right, default: () => false }),
       userQuestion: Annotation({ reducer: (_left, right) => right, default: () => "" }),
       followUpContext: Annotation({ reducer: (_left, right) => right, default: () => "" }),
+      conversationHistory: Annotation({ reducer: (_left, right) => right, default: () => [] }),
+      multiTurnContext: Annotation({ reducer: (_left, right) => right, default: () => false }),
       recognizedQuestion: Annotation({ reducer: (_left, right) => right, default: () => "" }),
       hasImage: Annotation({ reducer: (_left, right) => right, default: () => false }),
       localAnswer: Annotation({ reducer: (_left, right) => right, default: () => null }),
@@ -1036,11 +1052,15 @@ async function getLearningAgentGraph() {
       const userQuestion = String(payload.extraQuestion || "").trim();
       const hasImage = Boolean(payload.imageDataUrl);
       const isFollowUp = Boolean(payload.followUp);
+      const multiTurnContext = Boolean(payload.multiTurnContext);
+      const conversationHistory = Array.isArray(payload.conversationHistory) ? payload.conversationHistory : [];
       return {
         userQuestion,
         hasImage,
         isFollowUp,
         followUpContext: String(payload.currentAnswerContext || "").trim(),
+        conversationHistory,
+        multiTurnContext,
         intent: isFollowUp ? classifyLearningIntent(userQuestion, false) : classifyLearningIntent(userQuestion, hasImage),
       };
     };
@@ -1184,26 +1204,33 @@ async function getLearningAgentGraph() {
       const similarMarkdown = state.intent === "similar_practice"
         ? buildSimilarQuestionsMarkdown(state.similarQuestions)
         : "";
+      const systemPrompt = buildAgentSystemPrompt("local_enhance");
+      const currentUserMessage = buildAgentUserPrompt({
+        intent: state.intent,
+        userQuestion: state.userQuestion,
+        localContext,
+        similarMarkdown,
+        hasImage: state.hasImage,
+        followUpContext: state.followUpContext,
+      });
+      const useMultiTurn = state.multiTurnContext && state.conversationHistory.length > 0;
+      const messages = useMultiTurn
+        ? buildMultiTurnMessages(systemPrompt, state.conversationHistory, buildAgentUserPrompt({
+            intent: state.intent,
+            userQuestion: state.userQuestion,
+            localContext,
+            similarMarkdown,
+            hasImage: state.hasImage,
+            followUpContext: "",
+          }))
+        : [{ role: "system", content: systemPrompt }, { role: "user", content: currentUserMessage }];
       const modelResult = await callChatCompletion({
         apiKey: payload.apiKey,
         baseUrl: payload.baseUrl,
         model: payload.model || "deepseek-v4-flash",
         temperature: payload.temperature,
         maxTokens: 1200,
-        messages: [
-          { role: "system", content: buildAgentSystemPrompt("local_enhance") },
-          {
-            role: "user",
-            content: buildAgentUserPrompt({
-              intent: state.intent,
-              userQuestion: state.userQuestion,
-              localContext,
-              similarMarkdown,
-              hasImage: state.hasImage,
-              followUpContext: state.followUpContext,
-            })
-          }
-        ]
+        messages,
       });
 
       return {
@@ -1231,6 +1258,7 @@ async function getLearningAgentGraph() {
       }
 
       const similarMarkdown = buildSimilarQuestionsMarkdown(state.similarQuestions);
+      const systemPrompt = state.hasImage ? buildSystemPrompt() : buildAgentSystemPrompt("general");
       const userContent = state.hasImage
         ? [
             {
@@ -1259,16 +1287,24 @@ async function getLearningAgentGraph() {
             followUpContext: state.followUpContext,
           });
 
+      const useMultiTurn = !state.hasImage && state.multiTurnContext && state.conversationHistory.length > 0;
+      const messages = useMultiTurn
+        ? buildMultiTurnMessages(systemPrompt, state.conversationHistory, buildAgentUserPrompt({
+            intent: state.intent,
+            userQuestion: state.userQuestion,
+            localContext: "",
+            similarMarkdown,
+            hasImage: false,
+            followUpContext: "",
+          }))
+        : [{ role: "system", content: systemPrompt }, { role: "user", content: userContent }];
       const modelResult = await callChatCompletion({
         apiKey: payload.apiKey,
         baseUrl: payload.baseUrl,
         model: payload.model || "deepseek-v4-flash",
         temperature: payload.temperature,
         maxTokens: state.hasImage ? 1800 : 1200,
-        messages: [
-          { role: "system", content: state.hasImage ? buildSystemPrompt() : buildAgentSystemPrompt("general") },
-          { role: "user", content: userContent }
-        ]
+        messages,
       });
 
       return {

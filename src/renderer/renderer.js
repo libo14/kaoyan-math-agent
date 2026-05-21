@@ -43,6 +43,10 @@ const saveSettingsButton = document.querySelector("#saveSettingsButton");
 const exportDataButton = document.querySelector("#exportDataButton");
 const importDataButton = document.querySelector("#importDataButton");
 const importDataInput = document.querySelector("#importDataInput");
+const masteryBar = document.querySelector("#masteryBar");
+const masteryDisplay = document.querySelector("#masteryDisplay");
+const tokenUsage = document.querySelector("#tokenUsage");
+const multiTurnToggle = document.querySelector("#multiTurnToggle");
 
 const CONFIG_KEY = "mathTutorConfig";
 const LEGACY_PROTOTYPE_CONFIG_KEY = "mathTutorMobilePrototypeConfig";
@@ -51,6 +55,8 @@ const HISTORY_KEY = "mathTutorHistory";
 const FAVORITES_KEY = "mathTutorFavorites";
 const REVIEW_CARDS_KEY = "mathTutorReviewCards";
 const STAGE_MATERIALS_KEY = "mathTutorStageMaterials";
+const CONVERSATIONS_KEY = "mathTutorConversations";
+const MASTERY_KEY = "mathTutorMastery";
 const PROVIDER_PRESETS = {
   deepseek: {
     baseUrl: "https://api.deepseek.com/v1",
@@ -93,12 +99,21 @@ let currentRawContent = "";
 let currentTitle = "";
 let currentSource = null;
 let activeHubPanel = "foundation";
+let activeMasteryFilter = "all";
 let favorites = [];
 let reviewCards = [];
 let stageMaterials = [];
 let history = [];
 let activeSavedContext = null;
 let recognitionEditMode = false;
+
+// Conversation memory
+let conversations = { activeId: null, items: {} };
+let currentConversationId = null;
+
+// Mastery tracking
+let masteryMap = {};  // { sourceQuestionId: "new"|"learning"|"mastered"|"needs_review" }
+let sessionTokenUsage = { prompt: 0, completion: 0, total: 0, calls: [] };
 
 function getConfig() {
   try {
@@ -115,6 +130,8 @@ function setConfig(config) {
     apiKey: config.apiKey,
     baseUrl: config.baseUrl,
     model: config.model,
+    visionModel: config.visionModel || config.model,
+    textModel: config.textModel || config.model,
     temperature: "0.25"
   }));
 }
@@ -213,6 +230,8 @@ function initConfig() {
   hide(setupScreen);
   hide(loadingScreen);
   show(appScreen);
+  // Restore last conversation after app screen is shown
+  setTimeout(() => restoreLastConversation(), 200);
 }
 
 function typeset(element) {
@@ -298,8 +317,192 @@ function loadLocalData() {
   reviewCards = readJson(REVIEW_CARDS_KEY, []);
   stageMaterials = readJson(STAGE_MATERIALS_KEY, []);
   history = readJson(HISTORY_KEY, []);
+  conversations = readJson(CONVERSATIONS_KEY, { activeId: null, items: {} });
+  loadMastery();
   renderHub();
   renderFavorites();
+}
+
+function getActiveConversation() {
+  if (!conversations.activeId) return null;
+  return conversations.items[conversations.activeId] || null;
+}
+
+function createConversation(sourceQuestionId, recognizedQuestion, title) {
+  const id = `conv_${Date.now()}`;
+  const now = new Date().toISOString();
+  conversations.items[id] = {
+    id,
+    sourceQuestionId: sourceQuestionId || null,
+    recognizedQuestion: recognizedQuestion || "",
+    title: title || "数学题解析",
+    turns: [],
+    createdAt: now,
+    updatedAt: now
+  };
+  conversations.activeId = id;
+  currentConversationId = id;
+  writeJson(CONVERSATIONS_KEY, conversations);
+  return id;
+}
+
+function addTurnToConversation(conversationId, userQuestion, assistantAnswer) {
+  const conv = conversations.items[conversationId];
+  if (!conv) return;
+  const now = new Date().toISOString();
+  conv.turns.push({
+    user: userQuestion || "",
+    assistant: assistantAnswer || "",
+    createdAt: now
+  });
+  conv.updatedAt = now;
+  conversations.activeId = conversationId;
+  writeJson(CONVERSATIONS_KEY, conversations);
+}
+
+function getRecentTurnsContext(conversationId, maxTurns = 3) {
+  const conv = conversations.items[conversationId];
+  if (!conv || !conv.turns.length) return "";
+  const recent = conv.turns.slice(-maxTurns);
+  return recent.map((turn, i) => [
+    `[追问${i + 1}] 用户：${turn.user}`,
+    `回答摘要：${turn.assistant.slice(0, 300)}${turn.assistant.length > 300 ? "..." : ""}`,
+  ].join("\n")).join("\n\n");
+}
+
+function restoreLastConversation() {
+  const conv = getActiveConversation();
+  if (!conv) return false;
+  currentConversationId = conv.id;
+  currentTitle = conv.title || "数学题解析";
+  if (conv.sourceQuestionId) {
+    currentSource = { id: conv.sourceQuestionId };
+  }
+  // Restore the last assistant answer as current content
+  if (conv.turns.length) {
+    const lastTurn = conv.turns[conv.turns.length - 1];
+    currentRawContent = lastTurn.assistant || "";
+    answerContent.innerHTML = markdownLite(currentRawContent);
+    setStatus(`已恢复对话 · ${conv.turns.length}轮追问`);
+    typeset(answerContent);
+    return true;
+  }
+  return false;
+}
+
+// --- Mastery tracking ---
+
+function loadMastery() {
+  masteryMap = readJson(MASTERY_KEY, {});
+}
+
+function saveMastery() {
+  writeJson(MASTERY_KEY, masteryMap);
+}
+
+function getMasteryKey() {
+  return currentSource?.id || currentConversationId || null;
+}
+
+function getMasteryLabel(status) {
+  if (status === "mastered") return "已掌握";
+  if (status === "learning") return "学习中";
+  if (status === "needs_review") return "需复习";
+  return "";
+}
+
+function setMastery(status) {
+  const key = getMasteryKey();
+  if (!key) {
+    setStatus("请先解析一道题", true);
+    return;
+  }
+  masteryMap[key] = status;
+  saveMastery();
+
+  // Auto-save to stage materials if not already there
+  const existsInStage = stageMaterials.some((item) =>
+    (item.sourceQuestionId && item.sourceQuestionId === key) || item.id === key
+  );
+  if (!existsInStage && currentRawContent) {
+    const now = new Date().toISOString();
+    stageMaterials.unshift({
+      id: Date.now(),
+      stage: "foundation",
+      type: currentSource?.id ? "question" : "knowledge",
+      title: currentTitle || "数学题解析",
+      content: currentRawContent,
+      sourceQuestionId: currentSource?.id || null,
+      knowledgePoints: currentSource?.knowledgePoints || inferKnowledge(currentRawContent),
+      metadata: currentSource?.metadata || {},
+      mastery: 0,
+      createdAt: now,
+      updatedAt: now
+    });
+    writeJson(STAGE_MATERIALS_KEY, stageMaterials);
+  }
+
+  renderMasteryBar();
+  renderHub();
+  setStatus(`已标记为「${getMasteryLabel(status)}」`);
+}
+
+function renderMasteryBar() {
+  if (!masteryBar) return;
+  const key = getMasteryKey();
+  const status = key ? masteryMap[key] || "" : "";
+  if (!key || !currentRawContent) {
+    masteryBar.hidden = true;
+    return;
+  }
+  masteryBar.hidden = false;
+  document.querySelectorAll(".mastery-btn").forEach((btn) => {
+    const btnStatus = btn.dataset.mastery;
+    btn.className = "mastery-btn" + (btnStatus === status ? ` active-${status}` : "");
+  });
+  if (masteryDisplay) {
+    masteryDisplay.textContent = status ? getMasteryLabel(status) : "";
+  }
+}
+
+// --- Token usage display ---
+
+function resetSessionTokens() {
+  sessionTokenUsage = { prompt: 0, completion: 0, total: 0, calls: [] };
+}
+
+function addTokenUsage(usage, label) {
+  if (!usage) return;
+  const prompt = usage.prompt_tokens || 0;
+  const completion = usage.completion_tokens || 0;
+  const total = usage.total_tokens || (prompt + completion);
+  sessionTokenUsage.prompt += prompt;
+  sessionTokenUsage.completion += completion;
+  sessionTokenUsage.total += total;
+  sessionTokenUsage.calls.push({ label, prompt, completion, total });
+}
+
+function renderTokenUsage() {
+  if (!tokenUsage) return;
+  if (!sessionTokenUsage.calls.length) {
+    tokenUsage.hidden = true;
+    return;
+  }
+  tokenUsage.hidden = false;
+  const calls = sessionTokenUsage.calls;
+  const last = calls[calls.length - 1];
+  let html = "";
+  if (calls.length > 1) {
+    html += `<span class="token-tag">累计 <strong>${sessionTokenUsage.total}</strong> token</span>`;
+    html += `<span class="token-tag">输入 <strong>${sessionTokenUsage.prompt}</strong></span>`;
+    html += `<span class="token-tag">输出 <strong>${sessionTokenUsage.completion}</strong></span>`;
+    html += `<span style="margin-left:4px;color:var(--muted)">·</span>`;
+  }
+  html += `<span class="token-tag">${escapeHtml(last.label)} <strong>${last.total}</strong> token</span>`;
+  if (calls.length > 1) {
+    html += `<span class="token-tag">共 ${calls.length} 次调用</span>`;
+  }
+  tokenUsage.innerHTML = html;
 }
 
 function syncSettingsFields() {
@@ -307,22 +510,37 @@ function syncSettingsFields() {
   if (settingsApiKey) settingsApiKey.value = config.apiKey || "";
   const baseUrl = config.baseUrl || "https://api.deepseek.com/v1";
   const model = config.model || "deepseek-chat";
+  const visionModel = config.visionModel || model;
+  const textModel = config.textModel || model;
   const provider = inferProvider(baseUrl, model);
   if (settingsProvider) settingsProvider.value = provider;
   if (settingsBaseUrl) settingsBaseUrl.value = baseUrl;
   if (settingsModel) settingsModel.value = model;
+  const visionModelInput = document.querySelector("#settingsVisionModel");
+  const textModelInput = document.querySelector("#settingsTextModel");
+  if (visionModelInput) visionModelInput.value = visionModel;
+  if (textModelInput) textModelInput.value = textModel;
   renderModelPresetOptions(provider, model);
+  if (multiTurnToggle) {
+    const enabled = Boolean(config.multiTurnContext);
+    multiTurnToggle.setAttribute("aria-checked", String(enabled));
+  }
 }
 
 function saveSettingsFromPanel() {
   const apiKey = settingsApiKey.value.trim();
   const baseUrl = settingsBaseUrl.value.trim();
   const model = settingsModel.value.trim();
+  const visionModelInput = document.querySelector("#settingsVisionModel");
+  const textModelInput = document.querySelector("#settingsTextModel");
+  const visionModel = visionModelInput?.value.trim() || model;
+  const textModel = textModelInput?.value.trim() || model;
+  const multiTurnContext = multiTurnToggle?.getAttribute("aria-checked") === "true";
   if (!apiKey || !baseUrl || !model) {
     setStatus("请补全 API 配置", true);
     return;
   }
-  setConfig({ apiKey, baseUrl, model });
+  setConfig({ apiKey, baseUrl, model, visionModel, textModel, multiTurnContext });
   setStatus("配置已保存");
 }
 
@@ -439,6 +657,7 @@ function openContent(item, label = "已载入内容") {
   answerContent.innerHTML = markdownLite(currentRawContent);
   setStatus(label);
   switchTab("study");
+  renderMasteryBar();
   typeset(answerContent);
 }
 
@@ -571,9 +790,12 @@ function renderMobileList(container, items, emptyText, kind) {
     const row = document.createElement("div");
     row.className = "mobile-list-item";
     const date = item.updatedAt || item.createdAt || new Date().toISOString();
+    const masteryKey = item.sourceQuestionId || item.id;
+    const mastery = masteryMap[masteryKey] || "";
+    const masteryBadge = mastery ? `<span class="list-mastery-badge badge-${mastery}">${getMasteryLabel(mastery)}</span>` : "";
     row.innerHTML = `
       <div>
-        <strong>${escapeHtml(item.title || "学习资料")}</strong>
+        <strong>${escapeHtml(item.title || "学习资料")}${masteryBadge}</strong>
         <small>${new Date(date).toLocaleDateString()}${item.knowledgePoints?.length ? ` · ${escapeHtml(item.knowledgePoints.slice(0, 3).join("、"))}` : ""}</small>
       </div>
       <div class="mobile-list-actions">
@@ -603,7 +825,8 @@ function exportLocalData() {
     history,
     favorites,
     reviewCards,
-    stageMaterials
+    stageMaterials,
+    mastery: masteryMap
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -631,6 +854,7 @@ function importLocalData(file) {
       if (Array.isArray(payload.favorites)) writeJson(FAVORITES_KEY, payload.favorites);
       if (Array.isArray(payload.reviewCards)) writeJson(REVIEW_CARDS_KEY, payload.reviewCards);
       if (Array.isArray(payload.stageMaterials)) writeJson(STAGE_MATERIALS_KEY, payload.stageMaterials);
+      if (payload.mastery && typeof payload.mastery === "object") writeJson(MASTERY_KEY, payload.mastery);
       loadLocalData();
       syncSettingsFields();
       setStatus("学习数据已导入");
@@ -639,6 +863,16 @@ function importLocalData(file) {
     }
   };
   reader.readAsText(file);
+}
+
+function applyMasteryFilter(items) {
+  if (activeMasteryFilter === "all") return items;
+  return items.filter((item) => {
+    const key = item.sourceQuestionId || item.id;
+    const m = masteryMap[key] || "";
+    if (activeMasteryFilter === "new") return !m;
+    return m === activeMasteryFilter;
+  });
 }
 
 function renderHub() {
@@ -650,7 +884,7 @@ function renderHub() {
   intensiveCount.textContent = intensiveItems.length;
   dueReviewCountMobile.textContent = dueCards.length;
 
-  const items = activeHubPanel === "foundation"
+  let items = activeHubPanel === "foundation"
     ? foundationItems
     : activeHubPanel === "intensive"
       ? intensiveItems
@@ -660,6 +894,18 @@ function renderHub() {
     : activeHubPanel === "intensive"
       ? "还没有强化资料。解析后可以点“加入强化”。"
       : "还没有复习卡。解析后可以点“复习卡”。";
+
+  // Apply mastery filter (not for review cards)
+  if (activeHubPanel !== "review") {
+    items = applyMasteryFilter(items);
+  }
+
+  // Show/hide mastery filter based on panel
+  const masteryFilterEl = document.querySelector(".mastery-filter");
+  if (masteryFilterEl) {
+    masteryFilterEl.style.display = activeHubPanel === "review" ? "none" : "";
+  }
+
   renderMobileList(hubList, items, empty, activeHubPanel === "review" ? "review" : "stage");
 }
 
@@ -732,6 +978,7 @@ async function recognizeUploadedImage() {
   renderRecognizedQuestion();
 
   try {
+    const visionModel = config.visionModel || config.model;
     const response = await fetch("/api/recognize-image", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -740,7 +987,7 @@ async function recognizeUploadedImage() {
         extraQuestion: questionInput.value.trim(),
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,
-        model: config.model,
+        model: visionModel,
         temperature: "0"
       })
     });
@@ -752,6 +999,11 @@ async function recognizeUploadedImage() {
     renderRecognizedQuestion();
     setRecognitionStatus(`识别完成 · ${result.model || "vision model"}`);
     setStatus("请核对题目识别，再发送解析");
+    // Track token usage from recognition
+    if (result.usage) {
+      addTokenUsage(result.usage, "图片识别");
+      renderTokenUsage();
+    }
   } catch (error) {
     recognizedQuestionText = "";
     recognizedQuestionInput.value = "";
@@ -806,28 +1058,56 @@ async function solve(options = {}) {
 
   sendButton.disabled = true;
   cameraButton.disabled = true;
+  if (!isFollowUp) resetSessionTokens();
   setStatus(isFollowUp ? "正在结合本地资料调用模型追问" : "正在检索本地题库");
   answerContent.innerHTML = `<p>${isFollowUp ? "正在结合当前题目和本地资料回答追问。" : "正在检索本地题库，并准备解析你的问题。"}</p>`;
 
   const contextItem = activeSavedContext || null;
   const sourceQuestionId = currentSource?.id || contextItem?.sourceQuestionId || null;
   const currentAnswerContext = currentRawContent || contextItem?.content || "";
+  const multiTurnEnabled = Boolean(config.multiTurnContext);
+
+  // Build conversation context for follow-ups
+  let conversationContext = "";
+  let conversationHistory = [];
+  if (isFollowUp && currentConversationId) {
+    const conv = conversations.items[currentConversationId];
+    if (multiTurnEnabled && conv?.turns?.length) {
+      // Build multi-turn messages array
+      for (const turn of conv.turns) {
+        if (turn.user) conversationHistory.push({ role: "user", content: turn.user });
+        if (turn.assistant) conversationHistory.push({ role: "assistant", content: turn.assistant });
+      }
+    } else {
+      conversationContext = getRecentTurnsContext(currentConversationId, 3);
+    }
+  }
+
+  const fullAnswerContext = multiTurnEnabled && isFollowUp
+    ? currentAnswerContext
+    : [currentAnswerContext, conversationContext].filter(Boolean).join("\n\n---\n\n对话历史：\n");
 
   try {
+    const visionModel = config.visionModel || config.model;
+    const textModel = config.textModel || config.model;
     const response = await fetch("/api/solve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         followUp: isFollowUp,
         sourceQuestionId,
-        currentAnswerContext,
+        currentAnswerContext: fullAnswerContext,
+        conversationHistory,
+        multiTurnContext: multiTurnEnabled && isFollowUp,
         imageDataUrl,
         fileName: selectedFileName,
         recognizedQuestion: recognizedQuestionInput?.value.trim() || recognizedQuestionText,
         extraQuestion,
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,
-        model: config.model,
+        model: imageDataUrl ? visionModel : textModel,
+        visionModel,
+        textModel,
         temperature: "0.25"
       })
     });
@@ -837,10 +1117,30 @@ async function solve(options = {}) {
     currentRawContent = result.content || "";
     currentTitle = makeResultTitle(result, extraQuestion);
     currentSource = result.source || null;
+
+    // Manage conversation memory
+    const convSourceId = sourceQuestionId || currentSource?.id || null;
+    const convRecognized = recognizedQuestionInput?.value.trim() || recognizedQuestionText || "";
+    if (isFollowUp && currentConversationId) {
+      addTurnToConversation(currentConversationId, extraQuestion, currentRawContent);
+    } else {
+      // New conversation
+      const convId = createConversation(convSourceId, convRecognized, currentTitle);
+      addTurnToConversation(convId, extraQuestion || "解析题目", currentRawContent);
+    }
+
     saveHistoryItem(result, extraQuestion);
     answerContent.innerHTML = markdownLite(result.content || "");
     setStatus(makeStatusLabel(result));
     activeSavedContext = null;
+    // Track token usage from solve
+    if (result.usage) {
+      const routeLabel = result.agentTrace?.route === "local_enhance" ? "本地增强" :
+        result.agentTrace?.route === "model_solve" ? "模型解题" : "解题";
+      addTokenUsage(result.usage, routeLabel);
+    }
+    renderTokenUsage();
+    renderMasteryBar();
     renderHub();
     renderFavorites();
     typeset(answerContent);
@@ -910,6 +1210,11 @@ saveIntensiveButton.addEventListener("click", () => saveStageMaterial("intensive
 saveReviewButton.addEventListener("click", saveReviewCard);
 saveFavoriteButton.addEventListener("click", saveFavorite);
 
+// Mastery buttons
+document.querySelectorAll(".mastery-btn").forEach((btn) => {
+  btn.addEventListener("click", () => setMastery(btn.dataset.mastery));
+});
+
 document.querySelectorAll(".bottom-tab").forEach((button) => {
   button.addEventListener("click", () => switchTab(button.dataset.tab));
 });
@@ -922,6 +1227,14 @@ document.querySelectorAll("[data-hub-panel]").forEach((button) => {
   });
 });
 
+document.querySelectorAll("[data-mastery-filter]").forEach((button) => {
+  button.addEventListener("click", () => {
+    activeMasteryFilter = button.dataset.masteryFilter;
+    document.querySelectorAll("[data-mastery-filter]").forEach((item) => item.classList.toggle("active", item === button));
+    renderHub();
+  });
+});
+
 settingsProvider.addEventListener("change", () => applyProviderPreset(settingsProvider.value));
 settingsModelPreset.addEventListener("change", () => {
   settingsModel.value = settingsModelPreset.value;
@@ -929,6 +1242,12 @@ settingsModelPreset.addEventListener("change", () => {
 settingsModel.addEventListener("input", () => {
   renderModelPresetOptions(settingsProvider.value, settingsModel.value.trim());
 });
+if (multiTurnToggle) {
+  multiTurnToggle.addEventListener("click", () => {
+    const current = multiTurnToggle.getAttribute("aria-checked") === "true";
+    multiTurnToggle.setAttribute("aria-checked", String(!current));
+  });
+}
 refreshModelsButton.addEventListener("click", refreshAvailableModels);
 saveSettingsButton.addEventListener("click", saveSettingsFromPanel);
 exportDataButton.addEventListener("click", exportLocalData);
